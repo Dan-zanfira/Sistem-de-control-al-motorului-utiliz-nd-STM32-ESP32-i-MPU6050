@@ -1,0 +1,98 @@
+#include <Wire.h>
+#include <Adafruit_MPU6050.h>
+#include <Adafruit_Sensor.h>
+#include "BluetoothSerial.h"
+#include <math.h> 
+
+#if !defined(CONFIG_BT_ENABLED) || !defined(CONFIG_BLUEDROID_ENABLED)
+#error Bluetooth nu este activat!
+#endif
+
+Adafruit_MPU6050 mpu;
+BluetoothSerial SerialBT;
+
+#define I2C_SDA 21
+#define I2C_SCL 22
+
+// Adresa MAC unică a modulului tău HC-05
+uint8_t address[6] = {0x98, 0xDA, 0x50, 0x04, 0x13, 0x3A};
+bool connected = false;
+
+void setup(void) {
+  Serial.begin(115200);
+  while (!Serial) delay(10); 
+
+  Serial.println("=================================");
+  Serial.println("Inițializare sistem ESP32 Master.");
+  Serial.println("=================================");
+  
+  Wire.begin(I2C_SDA, I2C_SCL);
+
+  // Verificare MPU6050
+  if (!mpu.begin()) {
+    Serial.println("❌ Nu s-a găsit MPU6050! Verifică firele (21=SDA, 22=SCL).");
+    while (1) { delay(10); } 
+  }
+  Serial.println("✅ MPU6050 a fost găsit!");
+  
+  mpu.setAccelerometerRange(MPU6050_RANGE_8_G);
+  mpu.setGyroRange(MPU6050_RANGE_500_DEG);
+  mpu.setFilterBandwidth(MPU6050_BAND_21_HZ);
+
+  // Pornim Bluetooth-ul ca MASTER
+  SerialBT.begin("ESP32_Master", true); 
+  Serial.println("✅ Bluetooth pornit în modul MASTER.");
+
+  // Setăm PIN-ul de securitate descoperit
+  SerialBT.setPin("1234", 4);
+  
+  Serial.println("Încerc conectarea directă la adresa MAC a HC-05...");
+  
+  // Conectare directă prin adresa MAC
+  connected = SerialBT.connect(address);
+  
+  if(connected) {
+    Serial.println("✅ CONECTAT CU SUCCES la HC-05!");
+  } else {
+    Serial.println("⚠️ Eșec la prima conectare. Reîncercăm automat în loop...");
+  }
+}
+
+void loop() {
+  // Logica de reconectare automată dacă se pierde semnalul
+  if(!connected) {
+    Serial.println("🔄 Încerc reconectarea directă la HC-05...");
+    connected = SerialBT.connect(address);
+    
+    if(connected) {
+       Serial.println("✅ Conectat cu succes la HC-05!");
+    } else {
+       Serial.println("❌ Conexiune eșuată. Reîncerc în 5 secunde...");
+       delay(5000); 
+       return; 
+    }
+  }
+
+  // Citirea senzorului și trimiterea datelor
+  sensors_event_t a, g, temp;
+  mpu.getEvent(&a, &g, &temp);
+
+  float ax = a.acceleration.x;
+  float ay = a.acceleration.y;
+  float az = a.acceleration.z;
+
+  // Calculul unghiului
+  int unghi = (atan2(ax, sqrt(ay*ay + az*az)) * 180.0) / PI;
+
+  if(unghi > 90) unghi = 90;
+  if(unghi < -90) unghi = -90;
+
+  // Trimitem unghiul prin Bluetooth către HC-05
+  SerialBT.println(unghi);
+
+  // Afișăm și în Serial Monitor pentru verificare
+  Serial.print("Unghi trimis: ");
+  Serial.println(unghi);
+
+  delay(100); 
+}
